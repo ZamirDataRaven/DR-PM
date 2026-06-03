@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -13,7 +14,7 @@ from zoneinfo import ZoneInfo, available_timezones
 import anthropic
 
 from board_html_validator import BoardHTMLValidationError, validate_board_html
-from config_manager import ConfigValidationError, save_config
+from config_manager import ConfigValidationError, validate_config
 from data_collector import parse_registry
 
 
@@ -44,7 +45,9 @@ _DAY_CRON = {"Mon": "1", "Tue": "2", "Wed": "3", "Thu": "4", "Fri": "5", "Sat": 
 _DAY_WEEKDAY = {"Mon": 0, "Tue": 1, "Wed": 2, "Thu": 3, "Fri": 4, "Sat": 5, "Sun": 6}
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+")
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*[a-z0-9]$")
-_REPO_RE = re.compile(r"^https://github\.com/[^/]+/[^/]+$")
+_GITHUB_URL_RE = re.compile(
+    r"https://github\.com/([^/]+)/([^/]+)/blob/([^/]+)/(.+)$"
+)
 
 _WORKFLOW_YAML = """\
 name: DR-PM | {project_name} | Daily Runner
@@ -103,8 +106,94 @@ jobs:
         run: python dr-pm/run_daily.py
 """
 
+_DATA_REQUEST_TEMPLATE = """\
+name: Data Request
+description: Request data or information needed for component progress
+title: "[DATA REQUEST] COMP-ID — brief description"
+labels: ["data-request"]
+body:
+  - type: dropdown
+    id: project
+    attributes:
+      label: Project
+      description: Which DR-PM project does this data request belong to?
+      options:
+{project_options}
+    validations:
+      required: true
+  - type: input
+    id: component
+    attributes:
+      label: Component ID
+      description: "Component ID this request blocks (e.g. COMP-PM-004)"
+      placeholder: "COMP-PM-004"
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What data do you need?
+    validations:
+      required: true
+  - type: textarea
+    id: source
+    attributes:
+      label: Suggested source
+      placeholder: "e.g. CRM system, client database, stakeholder"
+    validations:
+      required: false
+"""
 
-# ── Form collection (Issue #53) ───────────────────────────────────────────────
+
+# ── GitHub API helpers ────────────────────────────────────────────────────────
+
+def _gh_api_get(owner: str, repo: str, path: str, branch: str) -> tuple[str, str]:
+    result = subprocess.run(
+        ["gh", "api", f"repos/{owner}/{repo}/contents/{path}?ref={branch}"],
+        capture_output=True, text=True, timeout=30,
+    )
+    if result.returncode != 0:
+        raise PreflightError(f"Cannot read {path} from {owner}/{repo}: {result.stderr.strip()}")
+    data = json.loads(result.stdout)
+    return base64.b64decode(data["content"]).decode("utf-8"), data.get("sha", "")
+
+
+def _gh_api_put(owner: str, repo: str, path: str, content: str, message: str, sha: str, branch: str) -> None:
+    encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
+    args = [
+        "gh", "api", f"repos/{owner}/{repo}/contents/{path}",
+        "-X", "PUT",
+        "-f", f"message={message}",
+        "-f", f"content={encoded}",
+        "-f", f"branch={branch}",
+    ]
+    if sha:
+        args += ["-f", f"sha={sha}"]
+    result = subprocess.run(args, capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        raise OSError(f"Cannot write {path} to {owner}/{repo}: {result.stderr.strip()}")
+
+
+def _gh_api_upsert(owner: str, repo: str, path: str, content: str, message: str, branch: str) -> None:
+    try:
+        _, sha = _gh_api_get(owner, repo, path, branch)
+    except PreflightError:
+        sha = ""
+    _gh_api_put(owner, repo, path, content, message, sha, branch)
+
+
+def _parse_action_summary_url(url: str) -> tuple[str, str, str, str]:
+    """Parse GitHub blob URL → (owner, repo, branch, full_path)."""
+    m = _GITHUB_URL_RE.match(url.strip())
+    if not m:
+        raise ValueError("Expected https://github.com/owner/repo/blob/branch/path/_action-summary.md")
+    owner, repo, branch, path = m.group(1), m.group(2), m.group(3), m.group(4)
+    if not path.endswith("_action-summary.md"):
+        raise ValueError("URL must point to a file named _action-summary.md")
+    return owner, repo, branch, path
+
+
+# ── Form collection ───────────────────────────────────────────────────────────
 
 def _ask(prompt: str) -> str:
     return input(prompt).strip()
@@ -170,41 +259,64 @@ def _ask_phases() -> list[dict]:
         end = _ask_loop("  End date (YYYY-MM-DD): ", lambda v: None if date_re.match(v) else "use YYYY-MM-DD format")
         comps = _ask("  Component IDs (space-separated): ").split()
         slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or f"phase-{len(phases)+1}"
-        phases.append({"id": slug, "name": name, "description": desc, "start_date": start, "end_date": end, "component_ids": comps})
+        phases.append({"id": slug, "name": name, "description": desc,
+                       "start_date": start, "end_date": end, "component_ids": comps})
     return phases
 
 
 def collect_form() -> dict:
     print("=== DR-PM Initialization ===\n")
+
+    url = _ask_loop(
+        "_action-summary.md GitHub URL\n(https://github.com/owner/repo/blob/branch/path/_action-summary.md): ",
+        lambda v: None if ("github.com" in v and "_action-summary.md" in v)
+                  else "must be a GitHub URL ending in _action-summary.md",
+    )
+    try:
+        owner, repo, branch, summary_path = _parse_action_summary_url(url)
+    except ValueError as e:
+        print(f"Invalid URL: {e}")
+        sys.exit(1)
+    engagement_folder = str(Path(summary_path).parent)
+    repo_url = f"https://github.com/{owner}/{repo}"
+
+    print(f"\nRepo:              {repo_url}")
+    print(f"Engagement folder: {engagement_folder}")
+    print(f"Branch:            {branch}\n")
+
     project_name = _ask_loop("Project name: ", lambda v: None if v else "cannot be empty")
-    project_slug = _ask_loop("Project slug (lowercase, hyphens only, e.g. ns01): ",
-                              lambda v: None if _SLUG_RE.match(v) else "must match ^[a-z0-9][a-z0-9-]*[a-z0-9]$")
-    repo_url = _ask_loop("GitHub repo URL (https://github.com/owner/repo): ",
-                          lambda v: None if _REPO_RE.match(v) else "must be https://github.com/owner/repo")
-    engagement_folder = _ask_loop("Engagement folder (no leading /): ",
-                                   lambda v: None if v and not v.startswith("/") else "non-empty, no leading /")
+
+    suggested = re.sub(r"[^a-z0-9]+", "-", engagement_folder.split("/")[-1].lower()).strip("-") or "project"
+    project_slug = _ask_loop(
+        f"Project slug [{suggested}] (Enter to accept): ",
+        lambda v: None if (not v or _SLUG_RE.match(v)) else "must match ^[a-z0-9][a-z0-9-]*[a-z0-9]$",
+    ) or suggested
+
     internal = _ask_emails("Internal recipients (space-separated, Enter for none): ")
     client = _ask_emails("Client recipients (space-separated, Enter for none): ")
     schedule = _ask_schedule()
     phases = _ask_phases()
     board_ui_notes = _ask("Board UI notes (Enter to skip): ")
+
     return {
         "project_name": project_name, "project_slug": project_slug,
         "repo_url": repo_url, "engagement_folder": engagement_folder,
+        "_owner": owner, "_repo": repo, "_branch": branch,
         "recipients_internal": internal, "recipients_client": client,
         "email_schedule": schedule, "phases": phases,
         "board_ui_notes": board_ui_notes,
     }
 
 
-# ── Pre-flight validation (Issue #54) ────────────────────────────────────────
+# ── Pre-flight validation ─────────────────────────────────────────────────────
 
-def _check_registry(form: dict, root: str) -> tuple[str, list[dict]]:
-    reg_path = (Path(root) / form["engagement_folder"] / "01-decomposition" / "component-registry-v0.1.md")
+def _check_registry(form: dict) -> tuple[str, list[dict]]:
+    owner, repo, branch = form["_owner"], form["_repo"], form["_branch"]
+    reg_path = f"{form['engagement_folder']}/01-decomposition/component-registry-v0.1.md"
     try:
-        text = reg_path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        raise PreflightError(f"Component registry not found at {reg_path}")
+        text, _ = _gh_api_get(owner, repo, reg_path, branch)
+    except PreflightError as e:
+        raise PreflightError(f"Component registry not found: {e}")
     components = parse_registry(text)
     if not components:
         raise PreflightError(f"Registry not parseable at {reg_path}")
@@ -242,17 +354,22 @@ def _preflight_claude(form: dict, registry_text: str, summary_text: str) -> None
         raise PreflightError("Pre-flight validation failed — resolve issues above and re-run")
 
 
-def run_preflight(form: dict, project_repo_root: str) -> None:
-    registry_text, components = _check_registry(form, project_repo_root)
+def run_preflight(form: dict) -> str:
+    """Runs all preflight checks. Returns registry_text for reuse by board generation."""
+    registry_text, components = _check_registry(form)
     _check_phase_assignments(form, {c["id"] for c in components})
-    summary_path = Path(project_repo_root) / form["engagement_folder"] / "_action-summary.md"
-    if not summary_path.exists():
+    owner, repo, branch = form["_owner"], form["_repo"], form["_branch"]
+    summary_api_path = f"{form['engagement_folder']}/_action-summary.md"
+    try:
+        summary_text, _ = _gh_api_get(owner, repo, summary_api_path, branch)
+    except PreflightError:
         print("Warning: _action-summary.md not found — all components will initialise at Pending HLD Approval")
-    summary_text = summary_path.read_text(encoding="utf-8") if summary_path.exists() else ""
+        summary_text = ""
     _preflight_claude(form, registry_text, summary_text)
+    return registry_text
 
 
-# ── Board HTML generation (Issue #55) ────────────────────────────────────────
+# ── Board HTML generation ─────────────────────────────────────────────────────
 
 def _build_prompt(form: dict, registry_text: str, guidelines: str, template: str) -> tuple[str, str]:
     components = parse_registry(registry_text)
@@ -296,7 +413,7 @@ def generate_board_html(form: dict, registry_text: str) -> str:
     return html
 
 
-# ── Board deploy (Issue #56) ──────────────────────────────────────────────────
+# ── Board deploy ──────────────────────────────────────────────────────────────
 
 def deploy_board(html: str, project_slug: str) -> None:
     tmp = Path(f"/tmp/dr-pm-init-{project_slug}.html")
@@ -320,7 +437,7 @@ def deploy_board(html: str, project_slug: str) -> None:
         tmp.unlink(missing_ok=True)
 
 
-# ── Workflow provisioning (Issue #57) ─────────────────────────────────────────
+# ── Workflow provisioning ─────────────────────────────────────────────────────
 
 def _compute_cron(days: list[str], hour: int, timezone: str) -> str:
     offset_hours = int(datetime.now(ZoneInfo(timezone)).utcoffset().total_seconds() / 3600)
@@ -328,67 +445,27 @@ def _compute_cron(days: list[str], hour: int, timezone: str) -> str:
     return f"0 {utc_hour} * * {','.join(_DAY_CRON[d] for d in days)}"
 
 
-_DATA_REQUEST_TEMPLATE = """\
-name: Data Request
-description: Request data or information needed for component progress
-title: "[DATA REQUEST] COMP-ID — brief description"
-labels: ["data-request"]
-body:
-  - type: dropdown
-    id: project
-    attributes:
-      label: Project
-      description: Which DR-PM project does this data request belong to?
-      options:
-{project_options}
-    validations:
-      required: true
-  - type: input
-    id: component
-    attributes:
-      label: Component ID
-      description: "Component ID this request blocks (e.g. COMP-PM-004)"
-      placeholder: "COMP-PM-004"
-    validations:
-      required: true
-  - type: textarea
-    id: description
-    attributes:
-      label: What data do you need?
-    validations:
-      required: true
-  - type: textarea
-    id: source
-    attributes:
-      label: Suggested source
-      placeholder: "e.g. CRM system, client database, stakeholder"
-    validations:
-      required: false
-"""
-
-
-def _update_issue_template(form: dict, project_repo_root: str) -> None:
-    templates_dir = Path(project_repo_root) / ".github" / "ISSUE_TEMPLATE"
-    templates_dir.mkdir(parents=True, exist_ok=True)
-    dest = templates_dir / "data-request.yml"
+def _update_issue_template(form: dict) -> None:
+    owner, repo, branch = form["_owner"], form["_repo"], form["_branch"]
+    template_path = ".github/ISSUE_TEMPLATE/data-request.yml"
     new_option = f"        - \"{form['project_slug']} — {form['project_name']}\""
-    if dest.exists():
-        content = dest.read_text(encoding="utf-8")
+    try:
+        content, sha = _gh_api_get(owner, repo, template_path, branch)
         if form["project_slug"] not in content:
             content = re.sub(
                 r'(      options:\n)((?:        - .*\n)*)',
                 lambda m: m.group(1) + m.group(2) + new_option + "\n",
                 content,
             )
-        dest.write_text(content, encoding="utf-8")
-    else:
-        dest.write_text(
-            _DATA_REQUEST_TEMPLATE.replace("{project_options}", new_option),
-            encoding="utf-8",
-        )
+        _gh_api_put(owner, repo, template_path, content,
+                    f"chore: add {form['project_slug']} to data-request template", sha, branch)
+    except PreflightError:
+        content = _DATA_REQUEST_TEMPLATE.replace("{project_options}", new_option)
+        _gh_api_put(owner, repo, template_path, content,
+                    f"chore: create data-request template for {form['project_slug']}", "", branch)
 
 
-def _write_workflow(form: dict, project_repo_root: str) -> None:
+def _write_workflow(form: dict) -> None:
     sched = form["email_schedule"]
     cron = _compute_cron(sched["days"], sched["hour"], sched["timezone"])
     yaml_content = _WORKFLOW_YAML.format(
@@ -397,10 +474,11 @@ def _write_workflow(form: dict, project_repo_root: str) -> None:
         cron_expression=cron,
         engagement_folder=form["engagement_folder"],
     )
-    workflows_dir = Path(project_repo_root) / ".github" / "workflows"
-    workflows_dir.mkdir(parents=True, exist_ok=True)
-    (workflows_dir / "dr-pm-daily.yml").write_text(yaml_content, encoding="utf-8")
-    _update_issue_template(form, project_repo_root)
+    owner, repo, branch = form["_owner"], form["_repo"], form["_branch"]
+    workflow_file = f"dr-pm-{form['project_slug']}-daily.yml"
+    _gh_api_upsert(owner, repo, f".github/workflows/{workflow_file}", yaml_content,
+                   f"chore: provision DR-PM daily workflow for {form['project_slug']}", branch)
+    _update_issue_template(form)
 
 
 def _set_secrets(form: dict) -> None:
@@ -427,33 +505,14 @@ def _set_secrets(form: dict) -> None:
             raise ProvisionError(f"Failed to set secret {name}: {e.stderr.decode(errors='replace').strip()}")
 
 
-def provision_workflow(form: dict, project_repo_root: str) -> None:
-    _write_workflow(form, project_repo_root)
+def provision_workflow(form: dict) -> None:
+    _write_workflow(form)
     _set_secrets(form)
 
 
-# ── Config write (Issue #58) ──────────────────────────────────────────────────
+# ── Config write ──────────────────────────────────────────────────────────────
 
-def _git_commit_config(config: dict, root: str, folder: str) -> None:
-    config_rel = f"{folder}/reports/dr-pm-config.json"
-    for cmd in (
-        ["git", "-C", root, "add", config_rel],
-        ["git", "-C", root, "commit", "-m", f"chore: initialise DR-PM for {config['project_name']}"],
-        ["git", "-C", root, "push"],
-    ):
-        try:
-            subprocess.run(cmd, check=True, timeout=60, capture_output=True)
-        except subprocess.CalledProcessError:
-            if "push" in cmd:
-                print(f"Git push failed. Config saved locally. Push manually: git -C {root} push")
-                return
-            sys.exit(1)
-        except subprocess.TimeoutExpired:
-            print("Git command timed out.")
-            sys.exit(1)
-
-
-def write_config(form: dict, project_repo_root: str) -> None:
+def write_config(form: dict) -> None:
     slug = form["project_slug"]
     config = {
         "project_name": form["project_name"], "project_slug": slug,
@@ -463,20 +522,28 @@ def write_config(form: dict, project_repo_root: str) -> None:
         "recipients": {"internal": form["recipients_internal"], "client": form["recipients_client"]},
         "email_schedule": form["email_schedule"], "email_enabled": True,
         "phases": [{"id": p["id"], "name": p["name"], "description": p["description"],
-                    "start_date": p["start_date"], "end_date": p["end_date"], "component_ids": p["component_ids"]}
+                    "start_date": p["start_date"], "end_date": p["end_date"],
+                    "component_ids": p["component_ids"]}
                    for p in form["phases"]],
         "nginx_auth_user": "drpm",
         "initialized_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     try:
-        save_config(config, project_repo_root, form["engagement_folder"])
-    except (ConfigValidationError, OSError) as e:
+        validate_config(config)
+    except ConfigValidationError as e:
+        print(f"Config validation failed: {e}")
+        sys.exit(1)
+    owner, repo, branch = form["_owner"], form["_repo"], form["_branch"]
+    config_path = f"{form['engagement_folder']}/reports/dr-pm-config.json"
+    try:
+        _gh_api_upsert(owner, repo, config_path, json.dumps(config, indent=2),
+                       f"chore: initialise DR-PM for {config['project_name']}", branch)
+    except OSError as e:
         print(f"Config write failed: {e}")
         sys.exit(1)
-    _git_commit_config(config, project_repo_root, form["engagement_folder"])
 
 
-# ── Summary and main (Issues #59, #60) ───────────────────────────────────────
+# ── Summary and main ──────────────────────────────────────────────────────────
 
 def _compute_next_run(days: list[str], hour: int, tz_name: str) -> datetime:
     tz = ZoneInfo(tz_name)
@@ -506,14 +573,13 @@ def print_summary(form: dict, next_run_utc: datetime) -> None:
     print("  3. Confirm the GitHub Actions workflow is active in the project repo")
 
 
-def _preflight_and_generate(form: dict, root: str) -> str:
+def _preflight_and_generate(form: dict) -> str:
     print("\nRunning pre-flight checks...")
     try:
-        run_preflight(form, root)
+        registry_text = run_preflight(form)
     except PreflightError as e:
         print(f"Pre-flight failed: {e}")
         sys.exit(1)
-    registry_text, _ = _check_registry(form, root)
     print("\nGenerating board HTML (Claude API Call 2)...")
     try:
         html = generate_board_html(form, registry_text)
@@ -523,8 +589,8 @@ def _preflight_and_generate(form: dict, root: str) -> str:
     return html
 
 
-def _run_init(form: dict, root: str) -> None:
-    html = _preflight_and_generate(form, root)
+def _run_init(form: dict) -> None:
+    html = _preflight_and_generate(form)
     print("\nDeploying board to droplet...")
     try:
         deploy_board(html, form["project_slug"])
@@ -533,22 +599,21 @@ def _run_init(form: dict, root: str) -> None:
         sys.exit(1)
     print("\nProvisioning GitHub Actions workflow...")
     try:
-        provision_workflow(form, root)
+        provision_workflow(form)
     except (ProvisionError, FileNotFoundError) as e:
         print(f"Provisioning failed: {e}")
         sys.exit(1)
     print("\nWriting config to project repo...")
-    write_config(form, root)
+    write_config(form)
 
 
 def main() -> None:
-    root = str(Path.cwd())
     try:
         form = collect_form()
     except KeyboardInterrupt:
         print("\nInitialization cancelled.")
         sys.exit(0)
-    _run_init(form, root)
+    _run_init(form)
     sched = form["email_schedule"]
     next_run = _compute_next_run(sched["days"], sched["hour"], sched["timezone"])
     print_summary(form, next_run)

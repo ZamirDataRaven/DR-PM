@@ -94,9 +94,10 @@ def action_edit_schedule(config: dict, project_repo_root: str, engagement_folder
 
 def action_refresh(config: dict) -> None:
     repo_url = config.get("repo_url", "")
+    workflow_file = f"dr-pm-{config.get('project_slug', 'project')}-daily.yml"
     try:
         subprocess.run(
-            ["gh", "workflow", "run", "dr-pm-daily.yml", "--repo", repo_url],
+            ["gh", "workflow", "run", workflow_file, "--repo", repo_url],
             capture_output=True, timeout=30, check=True,
         )
     except FileNotFoundError:
