@@ -136,7 +136,6 @@ def build_email_body(payload: dict, delta: dict, config: dict) -> str:
     today = payload.get("generated", "")[:10]
     body = (
         _email_header(pname, board_url, today)
-        + _section("Phase Status", _phase_table(payload.get("phases", []), payload.get("components", {})))
         + _section("Component Progress", _step_table(payload.get("components", {})))
         + _section("New Progress (Last 24 Hours)", _advances_html(delta.get("advances", [])))
         + _section("Active Blockers", _issues_table(payload.get("blockers", []), "blocker"))
