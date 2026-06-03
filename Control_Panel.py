@@ -161,6 +161,92 @@ def _gh_api_get_registry(repo_url: str, engagement_folder: str) -> str:
     return base64.b64decode(data["content"]).decode("utf-8")
 
 
+_DRPM_OWNER = "ZamirDataRaven"
+_DRPM_REPO = "DR-PM"
+_DRPM_BRANCH = "main"
+_DO_HOST = "146.190.186.206"
+_DO_USER = "root"
+_SSH_KEY = str(Path("~/.ssh/dr_pm_actions").expanduser())
+
+
+def _read_drpm_file(filename: str) -> str:
+    result = subprocess.run(
+        ["gh", "api", f"repos/{_DRPM_OWNER}/{_DRPM_REPO}/contents/{filename}?ref={_DRPM_BRANCH}"],
+        capture_output=True, text=True, timeout=30,
+    )
+    if result.returncode != 0:
+        raise ConfigLoadError(f"Cannot read {filename} from DR-PM repo")
+    import base64, json as _json
+    data = _json.loads(result.stdout)
+    return base64.b64decode(data["content"]).decode("utf-8")
+
+
+def action_regenerate_board(config: dict) -> None:
+    from data_collector import parse_registry
+    import re as _re
+    slug = config["project_slug"]
+    print("Reading template files from DR-PM repo...")
+    try:
+        guidelines = _read_drpm_file("board_html_design_guidelines.md")
+        template = _read_drpm_file("board_html_prompt_template.txt")
+    except ConfigLoadError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+    registry_text, _ = _gh_api_get_registry(config["repo_url"], config["engagement_folder"])
+    components = parse_registry(registry_text)
+    phases_fmt = "\n".join(
+        f"{i+1}. {p['name']} ({p['id']}): {p.get('description','')}. "
+        f"Components: {', '.join(p.get('component_ids', []))}. Dates: {p['start_date']} to {p['end_date']}"
+        for i, p in enumerate(config.get("phases", []))
+    )
+    comps_fmt = "\n".join(f"- {c['id']}: {c['name']}" for c in components)
+    rendered = template
+    for key, val in {
+        "design_guidelines": guidelines, "project_name": config["project_name"],
+        "project_slug": slug, "board_url": config["board_url"],
+        "phases_formatted": phases_fmt, "components_formatted": comps_fmt,
+        "board_ui_notes": "No additional UI notes.",
+        "initialized_at": config.get("initialized_at", ""),
+    }.items():
+        rendered = rendered.replace(f"{{{key}}}", val)
+    system_block = rendered.split("[/SYSTEM]")[0].replace("[SYSTEM]\n", "").strip()
+    user_block = rendered.split("[USER]\n")[1].replace("\n[/USER]", "").strip()
+    print("Generating new board HTML (Claude)...")
+    client = anthropic.Anthropic(api_key=os.environ["CLAUDE_API_KEY"])
+    try:
+        msg = client.messages.create(
+            model="claude-sonnet-4-6", max_tokens=16000, system=system_block,
+            messages=[{"role": "user", "content": user_block}],
+        )
+    except anthropic.AuthenticationError:
+        print("Error: CLAUDE_API_KEY invalid")
+        sys.exit(1)
+    html = msg.content[0].text
+    from board_html_validator import BoardHTMLValidationError, validate_board_html
+    try:
+        validate_board_html(html)
+    except BoardHTMLValidationError as e:
+        print(f"Board validation failed: {e}")
+        sys.exit(1)
+    tmp = Path(f"/tmp/dr-pm-regen-{slug}.html")
+    tmp.write_text(html, encoding="utf-8")
+    ssh_opt = f"ssh -i {_SSH_KEY} -o StrictHostKeyChecking=no"
+    remote = f"{_DO_USER}@{_DO_HOST}:/var/www/dr-pm/{slug}/index.html"
+    print(f"Deploying to {remote}...")
+    try:
+        r = subprocess.run(["rsync", "-az", "-e", ssh_opt, str(tmp), remote],
+                           capture_output=True, timeout=60)
+        if r.returncode != 0:
+            print(f"Deploy failed: {r.stderr.decode(errors='replace').strip()}")
+            sys.exit(1)
+    except subprocess.TimeoutExpired:
+        print("Deploy timed out after 60s")
+        sys.exit(1)
+    finally:
+        tmp.unlink(missing_ok=True)
+    print(f"Board regenerated and deployed. View at: {config['board_url']}")
+
+
 def action_update_config(config: dict, project_repo_root: str, engagement_folder: str, brief_path: str) -> None:
     brief_content = Path(brief_path).read_text(encoding="utf-8")
     print("Reading component registry from GitHub...")
@@ -235,6 +321,7 @@ def _setup_parser() -> argparse.ArgumentParser:
     p_s.add_argument("--tz", required=True)
     p_u = sub.add_parser("update-config")
     p_u.add_argument("--brief", required=True, help="Path to updated project brief file")
+    sub.add_parser("regenerate-board")
     return parser
 
 
@@ -252,6 +339,8 @@ def _dispatch(args: argparse.Namespace, config: dict, root: str, folder: str) ->
         action_refresh(config)
     elif cmd == "update-config":
         action_update_config(config, root, folder, args.brief)
+    elif cmd == "regenerate-board":
+        action_regenerate_board(config)
 
 
 def main() -> None:

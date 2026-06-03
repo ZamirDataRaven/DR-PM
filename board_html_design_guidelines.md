@@ -97,9 +97,14 @@ Used as the primary accent on component cards (left border strip, 4px wide) and 
 
 - CSS grid, 4 columns by default; Claude may adjust to 3 or 5 based on component count
 - Each card: `border-radius: 8px`, background `#1e1e2e`, left border strip 4px in workflow step color, `box-shadow: 0 2px 8px rgba(0,0,0,0.4)`
-- Card content: component ID badge (top-left), component name (primary), current workflow step label (colored text matching step color, 12px)
+- Card content (top to bottom):
+  1. Component ID badge (top-left, 11px, muted `#7070a0`)
+  2. Component name (14px, 500 weight, `#e0e0f0`)
+  3. Open/closed task count (12px, muted — e.g. "3 open · 2 closed")
+  4. **Current DR step — displayed prominently at the bottom of the card** as a full-width pill/tag: step label text (e.g. "Pending HLD Approval") in the matching step color (see §4), 12px, 500 weight, centered, with a faint background tint of that same color at 15% opacity
+- The step label at the bottom must always be visible without interaction — it is not hidden behind a hover or click
 - If component has active blocker or data request, override card border per §4 alert rules
-- Clicking a card expands an inline task list below the card (accordion style, no modal) showing open and closed issues for that component
+- Clicking a card expands an inline task list below the card (accordion style, no modal) showing open and closed issues for that component, with issue number, title, and open/closed status
 
 ### Bottom zone — Active issues list
 
