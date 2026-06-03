@@ -38,7 +38,6 @@ _DO_HOST = "146.190.186.206"
 _DO_USER = "root"
 _SSH_KEY = str(Path("~/.ssh/dr_pm_actions").expanduser())
 _REMOTE_BASE = "/var/www/dr-pm"
-_DRPM_ROOT = Path(__file__).parent
 _MODEL = "claude-sonnet-4-6"
 _VALID_DAYS = frozenset({"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"})
 _DAY_CRON = {"Mon": "1", "Tue": "2", "Wed": "3", "Thu": "4", "Fri": "5", "Sat": "6", "Sun": "0"}
@@ -394,9 +393,22 @@ def _build_prompt(form: dict, registry_text: str, guidelines: str, template: str
     return system_block, user_block
 
 
+_DRPM_REPO_OWNER = "ZamirDataRaven"
+_DRPM_REPO_NAME = "DR-PM"
+_DRPM_REPO_BRANCH = "main"
+
+
+def _read_drpm_file(filename: str) -> str:
+    content, _ = _gh_api_get(_DRPM_REPO_OWNER, _DRPM_REPO_NAME, filename, _DRPM_REPO_BRANCH)
+    return content
+
+
 def generate_board_html(form: dict, registry_text: str) -> str:
-    guidelines = (_DRPM_ROOT / "board_html_design_guidelines.md").read_text(encoding="utf-8")
-    template = (_DRPM_ROOT / "board_html_prompt_template.txt").read_text(encoding="utf-8")
+    try:
+        guidelines = _read_drpm_file("board_html_design_guidelines.md")
+        template = _read_drpm_file("board_html_prompt_template.txt")
+    except PreflightError as e:
+        raise BoardGenerationError(f"Could not read template files from DR-PM repo: {e}")
     system_prompt, user_msg = _build_prompt(form, registry_text, guidelines, template)
     client = anthropic.Anthropic(api_key=os.environ["CLAUDE_API_KEY"])
     try:
