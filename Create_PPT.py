@@ -376,16 +376,8 @@ def _preflight_claude(form: dict, registry_text: str, summary_text: str) -> None
 
 
 def run_preflight(form: dict) -> str:
-    """Runs all preflight checks. Returns registry_text for reuse by board generation."""
+    """Reads the component registry. Returns registry_text for board generation."""
     registry_text, _ = _check_registry(form)
-    owner, repo, branch = form["_owner"], form["_repo"], form["_branch"]
-    summary_api_path = f"{form['engagement_folder']}/_action-summary.md"
-    try:
-        summary_text, _ = _gh_api_get(owner, repo, summary_api_path, branch)
-    except PreflightError:
-        print("Warning: _action-summary.md not found — all components will initialise at Pending HLD Approval")
-        summary_text = ""
-    _preflight_claude(form, registry_text, summary_text)
     return registry_text
 
 
