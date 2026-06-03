@@ -425,7 +425,7 @@ def generate_board_html(form: dict, registry_text: str) -> str:
     system_prompt, user_msg = _build_prompt(form, registry_text, guidelines, template)
     client = anthropic.Anthropic(api_key=os.environ["CLAUDE_API_KEY"])
     try:
-        msg = client.messages.create(model=_MODEL, max_tokens=8192, system=system_prompt,
+        msg = client.messages.create(model=_MODEL, max_tokens=16000, system=system_prompt,
                                      messages=[{"role": "user", "content": user_msg}])
     except anthropic.AuthenticationError:
         raise BoardGenerationError("CLAUDE_API_KEY invalid — board generation failed")
