@@ -84,6 +84,13 @@ Used as the primary accent on component cards (left border strip, 4px wide) and 
 
 ## 5. Layout — Three Zones
 
+### Page header (above all zones)
+
+Full-width dark bar (`background: #0f0f1a`, `padding: 32px 24px`). Content centered:
+- Project name: 22px, 600 weight, `#e0e0f0`, centered
+- Generated date + board URL: 13px, `#7070a0`, centered, below project name
+- "View Live Board" button: purple `#a855f7`, white text, `border-radius: 6px`, centered, below date line
+
 ### Top zone — Phase bar
 
 - Full-width horizontal bar
