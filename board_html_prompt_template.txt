@@ -28,7 +28,7 @@ Output requirements:
     <!-- issues-list -->     (immediately before the active issues section)
 
 Component card rendering rules (CRITICAL — follow exactly):
-- The component grid is a flat CSS grid. Do NOT insert any elements between card rows.
+- The component grid is a flat CSS grid with `align-items: start` — this is REQUIRED so expanding one card does not stretch sibling cards in the same row.
 - Each component card is one self-contained <div>. Cards must never break the grid flow.
 - Card structure top to bottom (all inside one card div):
     1. Component ID (e.g. "COMP-006") — small badge, muted color
