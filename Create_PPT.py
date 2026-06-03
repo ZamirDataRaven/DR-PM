@@ -328,6 +328,66 @@ def _compute_cron(days: list[str], hour: int, timezone: str) -> str:
     return f"0 {utc_hour} * * {','.join(_DAY_CRON[d] for d in days)}"
 
 
+_DATA_REQUEST_TEMPLATE = """\
+name: Data Request
+description: Request data or information needed for component progress
+title: "[DATA REQUEST] COMP-ID — brief description"
+labels: ["data-request"]
+body:
+  - type: dropdown
+    id: project
+    attributes:
+      label: Project
+      description: Which DR-PM project does this data request belong to?
+      options:
+{project_options}
+    validations:
+      required: true
+  - type: input
+    id: component
+    attributes:
+      label: Component ID
+      description: "Component ID this request blocks (e.g. COMP-PM-004)"
+      placeholder: "COMP-PM-004"
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What data do you need?
+    validations:
+      required: true
+  - type: textarea
+    id: source
+    attributes:
+      label: Suggested source
+      placeholder: "e.g. CRM system, client database, stakeholder"
+    validations:
+      required: false
+"""
+
+
+def _update_issue_template(form: dict, project_repo_root: str) -> None:
+    templates_dir = Path(project_repo_root) / ".github" / "ISSUE_TEMPLATE"
+    templates_dir.mkdir(parents=True, exist_ok=True)
+    dest = templates_dir / "data-request.yml"
+    new_option = f"        - \"{form['project_slug']} — {form['project_name']}\""
+    if dest.exists():
+        content = dest.read_text(encoding="utf-8")
+        if form["project_slug"] not in content:
+            content = re.sub(
+                r'(      options:\n)((?:        - .*\n)*)',
+                lambda m: m.group(1) + m.group(2) + new_option + "\n",
+                content,
+            )
+        dest.write_text(content, encoding="utf-8")
+    else:
+        dest.write_text(
+            _DATA_REQUEST_TEMPLATE.replace("{project_options}", new_option),
+            encoding="utf-8",
+        )
+
+
 def _write_workflow(form: dict, project_repo_root: str) -> None:
     sched = form["email_schedule"]
     cron = _compute_cron(sched["days"], sched["hour"], sched["timezone"])
@@ -340,11 +400,7 @@ def _write_workflow(form: dict, project_repo_root: str) -> None:
     workflows_dir = Path(project_repo_root) / ".github" / "workflows"
     workflows_dir.mkdir(parents=True, exist_ok=True)
     (workflows_dir / "dr-pm-daily.yml").write_text(yaml_content, encoding="utf-8")
-    templates_dir = Path(project_repo_root) / ".github" / "ISSUE_TEMPLATE"
-    templates_dir.mkdir(parents=True, exist_ok=True)
-    src = _DRPM_ROOT / "data-request.yml"
-    if src.exists():
-        (templates_dir / "data-request.yml").write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+    _update_issue_template(form, project_repo_root)
 
 
 def _set_secrets(form: dict) -> None:
