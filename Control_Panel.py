@@ -192,7 +192,7 @@ def action_regenerate_board(config: dict) -> None:
     except ConfigLoadError as e:
         print(f"Error: {e}")
         sys.exit(1)
-    registry_text, _ = _gh_api_get_registry(config["repo_url"], config["engagement_folder"])
+    registry_text = _gh_api_get_registry(config["repo_url"], config["engagement_folder"])
     components = parse_registry(registry_text)
     phases_fmt = "\n".join(
         f"{i+1}. {p['name']} ({p['id']}): {p.get('description','')}. "
