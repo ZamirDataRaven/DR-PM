@@ -28,19 +28,20 @@ Output requirements:
     <!-- issues-list -->     (immediately before the active issues section)
 
 Component card rendering rules (CRITICAL — follow exactly):
-- Each component card must be built by JavaScript reading from window.DR_PM_DATA.components
-- Card structure top to bottom:
+- The component grid is a flat CSS grid. Do NOT insert any elements between card rows.
+- Each component card is one self-contained <div>. Cards must never break the grid flow.
+- Card structure top to bottom (all inside one card div):
     1. Component ID (e.g. "COMP-006") — small badge, muted color
     2. Component name — primary text, white
     3. Task count line — "N open · N closed" in muted text (read from tasks.open.length / tasks.closed.length)
     4. Step label pill — ALWAYS at the bottom of the card, full card width, text centered
        The pill background must use the component's step_color value from the data (at 20% opacity)
-       The pill text must use the component's step_color value from the data (full opacity)
+       The pill text must use the component's step_color value from the data (full opacity, bold)
        The pill text is the component's step value (e.g. "Pending HLD Approval", "In Development")
        Apply step_color via JavaScript: element.style.backgroundColor and element.style.color
        This is the ONLY acceptable use of JS-applied inline styles — the step color is dynamic data
 - The card's left border strip (4px) must also use the component's step_color from the data
-- Clicking a card expands its task list inline (open issues first, then closed)
+- Task list accordion: clicking a card toggles a hidden <div> INSIDE that same card showing open and closed tasks. This div is part of the card — it does NOT appear outside the card or between grid rows. Default hidden (display:none), toggle on click.
 [/SYSTEM]
 
 [USER]
