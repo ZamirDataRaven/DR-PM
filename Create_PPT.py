@@ -309,7 +309,8 @@ def collect_form() -> dict:
     sched = extracted.get("email_schedule", {})
     print(f"  Schedule:  {' '.join(sched.get('days', []))} at {sched.get('hour','')}:00 {sched.get('timezone','')}")
     for p in extracted.get("phases", []):
-        print(f"  Phase:     {p['name']} {p.get('start_date','')} → {p.get('end_date','')} steps {p.get('step_range', [])}")
+        n = len(p.get("component_ids", []))
+        print(f"  Phase:     {p['name']} {p.get('start_date','')} → {p.get('end_date','')} ({n} components)")
 
     confirm = _ask("\nProceed? (Enter to confirm, n to cancel): ")
     if confirm.lower() == "n":
@@ -356,8 +357,15 @@ def _preflight_claude(form: dict, registry_text: str, summary_text: str) -> None
     try:
         msg = client.messages.create(model=_MODEL, max_tokens=1024, system=system,
                                      messages=[{"role": "user", "content": user}])
-        result = json.loads(msg.content[0].text)
-    except json.JSONDecodeError:
+        raw = msg.content[0].text.strip()
+        # Strip markdown fences if present
+        if raw.startswith("```"):
+            raw = re.sub(r"^```[a-z]*\n?", "", raw)
+            raw = re.sub(r"\n?```$", "", raw.strip())
+        # Extract first JSON object if there's a preamble
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        result = json.loads(m.group() if m else raw)
+    except (json.JSONDecodeError, AttributeError):
         result = {"verdict": "FAIL", "issues": ["Claude returned malformed validation response"]}
     except (anthropic.AuthenticationError, anthropic.APIConnectionError) as e:
         raise PreflightError(f"Claude API unavailable for validation: {e}")
