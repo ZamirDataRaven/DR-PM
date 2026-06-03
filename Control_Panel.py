@@ -2,10 +2,16 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import json
+import os
 import re
 import subprocess
 import sys
 import zoneinfo
+from pathlib import Path
+
+import anthropic
 
 from config_manager import ConfigLoadError, ConfigValidationError, load_config, save_config, VALID_DAYS
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+")
@@ -113,6 +119,102 @@ def action_refresh(config: dict) -> None:
     print(f"Manual refresh triggered. Check: {repo_url}/actions")
 
 
+# ── Config update from brief file ────────────────────────────────────────────
+
+_UPDATE_EXTRACTION_SYSTEM = """\
+You are a DR-PM project configuration extractor.
+Given a project brief and a component registry, extract updated configuration as JSON.
+Return ONLY valid JSON with these exact keys:
+{
+  "recipients_internal": ["email@domain.com"],
+  "recipients_client": ["email@domain.com"],
+  "email_schedule": {"days": ["Sun","Mon","Tue","Wed","Thu"], "hour": 8, "timezone": "Asia/Jerusalem"},
+  "phases": [
+    {
+      "id": "phase-slug",
+      "name": "Phase Name",
+      "description": "Description",
+      "start_date": "YYYY-MM-DD",
+      "end_date": "YYYY-MM-DD",
+      "component_ids": ["COMP-001", "COMP-002"]
+    }
+  ]
+}
+Rules:
+- component_ids must match IDs from the provided registry exactly
+- days must be from: Mon Tue Wed Thu Fri Sat Sun
+- timezone must be a valid IANA timezone name
+- Return JSON only, no explanation
+"""
+
+
+def _gh_api_get_registry(repo_url: str, engagement_folder: str) -> str:
+    owner_repo = repo_url.replace("https://github.com/", "").rstrip("/")
+    path = f"{engagement_folder}/01-decomposition/component-registry-v0.1.md"
+    result = subprocess.run(
+        ["gh", "api", f"repos/{owner_repo}/contents/{path}?ref=main"],
+        capture_output=True, text=True, timeout=30,
+    )
+    if result.returncode != 0:
+        raise ConfigLoadError(f"Cannot read registry from GitHub: {result.stderr.strip()}")
+    data = json.loads(result.stdout)
+    return base64.b64decode(data["content"]).decode("utf-8")
+
+
+def action_update_config(config: dict, project_repo_root: str, engagement_folder: str, brief_path: str) -> None:
+    brief_content = Path(brief_path).read_text(encoding="utf-8")
+    print("Reading component registry from GitHub...")
+    try:
+        registry_text = _gh_api_get_registry(config["repo_url"], engagement_folder)
+    except ConfigLoadError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+    print("Extracting updated configuration from brief (Claude)...")
+    try:
+        client = anthropic.Anthropic(api_key=os.environ["CLAUDE_API_KEY"])
+        msg = client.messages.create(
+            model="claude-sonnet-4-6", max_tokens=2048,
+            system=_UPDATE_EXTRACTION_SYSTEM,
+            messages=[{"role": "user", "content": f"REGISTRY:\n{registry_text}\n\nBRIEF:\n{brief_content}"}],
+        )
+        extracted = json.loads(msg.content[0].text)
+    except json.JSONDecodeError:
+        print("Error: Claude returned malformed JSON")
+        sys.exit(1)
+    except anthropic.AuthenticationError:
+        print("Error: CLAUDE_API_KEY invalid")
+        sys.exit(1)
+
+    print(f"\nExtracted:")
+    print(f"  Internal:  {', '.join(extracted.get('recipients_internal', [])) or '(none)'}")
+    print(f"  Client:    {', '.join(extracted.get('recipients_client', [])) or '(none)'}")
+    sched = extracted.get("email_schedule", {})
+    print(f"  Schedule:  {' '.join(sched.get('days', []))} at {sched.get('hour', '')}:00 {sched.get('timezone', '')}")
+    for p in extracted.get("phases", []):
+        print(f"  Phase:     {p['name']} {p.get('start_date','')} → {p.get('end_date','')} ({len(p.get('component_ids',[]))} components)")
+
+    confirm = input("\nApply these changes? (Enter to confirm, n to cancel): ").strip()
+    if confirm.lower() == "n":
+        print("Cancelled.")
+        sys.exit(0)
+
+    config["recipients"] = {
+        "internal": extracted.get("recipients_internal", config["recipients"]["internal"]),
+        "client": extracted.get("recipients_client", config["recipients"]["client"]),
+    }
+    if "email_schedule" in extracted:
+        config["email_schedule"] = extracted["email_schedule"]
+    if "phases" in extracted:
+        config["phases"] = extracted["phases"]
+
+    try:
+        save_config(config, project_repo_root, engagement_folder)
+    except (ConfigValidationError, OSError) as e:
+        print(f"Error saving config: {e}")
+        sys.exit(1)
+    print("Config updated. Push changes: git -C <project-repo-root> add -A && git push")
+
+
 # ── CLI setup and dispatch ────────────────────────────────────────────────────
 
 def _setup_parser() -> argparse.ArgumentParser:
@@ -131,6 +233,8 @@ def _setup_parser() -> argparse.ArgumentParser:
     p_s.add_argument("--days", required=True)
     p_s.add_argument("--hour", type=int, required=True)
     p_s.add_argument("--tz", required=True)
+    p_u = sub.add_parser("update-config")
+    p_u.add_argument("--brief", required=True, help="Path to updated project brief file")
     return parser
 
 
@@ -146,6 +250,8 @@ def _dispatch(args: argparse.Namespace, config: dict, root: str, folder: str) ->
         action_edit_schedule(config, root, folder, args.days.split(","), args.hour, args.tz)
     elif cmd == "refresh":
         action_refresh(config)
+    elif cmd == "update-config":
+        action_update_config(config, root, folder, args.brief)
 
 
 def main() -> None:
