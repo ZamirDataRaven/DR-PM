@@ -9,7 +9,7 @@ import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo, available_timezones
+from zoneinfo import ZoneInfo
 
 import anthropic
 
@@ -207,67 +207,66 @@ def _ask_loop(prompt: str, validate) -> str:
         print(f"Invalid: {err}. Please re-enter.")
 
 
-def _ask_emails(prompt: str) -> list[str]:
-    while True:
-        raw = _ask(prompt)
-        if not raw:
-            return []
-        parts = raw.split()
-        bad = [e for e in parts if not _EMAIL_RE.match(e)]
-        if bad:
-            print(f"Invalid email(s): {', '.join(bad)}. Please re-enter.")
-        else:
-            return parts
+_BRIEF_EXTRACTION_SYSTEM = """\
+You are a DR-PM project configuration extractor.
+Given a project brief document and a component registry, extract structured configuration as JSON.
+Return ONLY valid JSON — no explanation, no markdown fences — with these exact keys:
+{
+  "project_name": "Full project name",
+  "project_slug": "lowercase-hyphens-only-max-30-chars",
+  "recipients_internal": ["email@domain.com"],
+  "recipients_client": ["email@domain.com"],
+  "email_schedule": {
+    "days": ["Sun", "Mon", "Tue", "Wed", "Thu"],
+    "hour": 8,
+    "timezone": "Asia/Jerusalem"
+  },
+  "phases": [
+    {
+      "id": "phase-slug",
+      "name": "Phase Name",
+      "description": "What this phase covers",
+      "start_date": "YYYY-MM-DD",
+      "end_date": "YYYY-MM-DD",
+      "component_ids": ["COMP-001", "COMP-002"]
+    }
+  ],
+  "board_ui_notes": ""
+}
+Rules:
+- Extract phases and their component assignments from the brief. If components are mentioned per phase, assign them. If not, split components evenly across phases.
+- component_ids must match IDs from the provided component registry exactly.
+- If no phases are specified, create two: Detail Design (first half of components) and Build (all components — components appear in all phases they actively belong to).
+- Extract dates from the brief; if missing, estimate from today forward.
+- days must be from: Mon Tue Wed Thu Fri Sat Sun
+- timezone must be a valid IANA timezone name
+- project_slug: lowercase, hyphens only, derived from project name
+"""
 
 
-def _ask_schedule() -> dict:
-    while True:
-        days_raw = _ask("Email days (comma-separated, e.g. Mon,Tue,Wed,Thu,Fri): ")
-        days = [d.strip() for d in days_raw.split(",") if d.strip()]
-        if not days or not all(d in _VALID_DAYS for d in days):
-            print("Invalid: use day names Mon Tue Wed Thu Fri Sat Sun, min 1.")
-            continue
-        hour_raw = _ask("Email hour (0-23, local timezone): ")
-        try:
-            hour = int(hour_raw)
-            if not 0 <= hour <= 23:
-                raise ValueError
-        except ValueError:
-            print("Invalid: hour must be an integer 0-23.")
-            continue
-        tz = _ask("Timezone (IANA, e.g. Asia/Jerusalem): ")
-        if tz not in available_timezones():
-            print(f"Invalid: unknown timezone '{tz}'. Use an IANA timezone name.")
-            continue
-        return {"days": days, "hour": hour, "timezone": tz}
-
-
-def _ask_phases() -> list[dict]:
-    phases = []
-    print("Enter phases (type 'done' when finished):")
-    date_re = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-    while True:
-        name = _ask(f"Phase {len(phases)+1} name (or 'done'): ")
-        if name.lower() == "done":
-            if not phases:
-                print("At least one phase is required.")
-                continue
-            break
-        desc = _ask("  Description: ")
-        start = _ask_loop("  Start date (YYYY-MM-DD): ", lambda v: None if date_re.match(v) else "use YYYY-MM-DD format")
-        end = _ask_loop("  End date (YYYY-MM-DD): ", lambda v: None if date_re.match(v) else "use YYYY-MM-DD format")
-        comps = _ask("  Component IDs (space-separated): ").split()
-        slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or f"phase-{len(phases)+1}"
-        phases.append({"id": slug, "name": name, "description": desc,
-                       "start_date": start, "end_date": end, "component_ids": comps})
-    return phases
+def _extract_from_brief(brief_content: str, registry_text: str) -> dict:
+    client = anthropic.Anthropic(api_key=os.environ["CLAUDE_API_KEY"])
+    user_msg = f"COMPONENT REGISTRY:\n{registry_text}\n\nPROJECT BRIEF:\n{brief_content}"
+    try:
+        msg = client.messages.create(
+            model=_MODEL, max_tokens=2048,
+            system=_BRIEF_EXTRACTION_SYSTEM,
+            messages=[{"role": "user", "content": user_msg}],
+        )
+        return json.loads(msg.content[0].text)
+    except json.JSONDecodeError:
+        raise PreflightError("Claude returned malformed JSON from brief extraction")
+    except anthropic.AuthenticationError:
+        raise PreflightError("CLAUDE_API_KEY invalid")
+    except anthropic.APIConnectionError as e:
+        raise PreflightError(f"Claude API unreachable: {e}")
 
 
 def collect_form() -> dict:
     print("=== DR-PM Initialization ===\n")
 
     url = _ask_loop(
-        "_action-summary.md GitHub URL\n(https://github.com/owner/repo/blob/branch/path/_action-summary.md): ",
+        "_action-summary.md GitHub URL: ",
         lambda v: None if ("github.com" in v and "_action-summary.md" in v)
                   else "must be a GitHub URL ending in _action-summary.md",
     )
@@ -283,27 +282,53 @@ def collect_form() -> dict:
     print(f"Engagement folder: {engagement_folder}")
     print(f"Branch:            {branch}\n")
 
-    project_name = _ask_loop("Project name: ", lambda v: None if v else "cannot be empty")
+    brief_path = _ask_loop(
+        "Path to project brief file (any format — text, JSON, etc.): ",
+        lambda v: None if Path(v).exists() else f"File not found: {v}",
+    )
+    brief_content = Path(brief_path).read_text(encoding="utf-8")
 
-    suggested = re.sub(r"[^a-z0-9]+", "-", engagement_folder.split("/")[-1].lower()).strip("-") or "project"
-    project_slug = _ask_loop(
-        f"Project slug [{suggested}] (Enter to accept): ",
-        lambda v: None if (not v or _SLUG_RE.match(v)) else "must match ^[a-z0-9][a-z0-9-]*[a-z0-9]$",
-    ) or suggested
+    print("\nReading component registry...")
+    try:
+        registry_text, _ = _gh_api_get(owner, repo, f"{engagement_folder}/01-decomposition/component-registry-v0.1.md", branch)
+    except PreflightError as e:
+        print(f"Could not read registry: {e}")
+        sys.exit(1)
 
-    internal = _ask_emails("Internal recipients (space-separated, Enter for none): ")
-    client = _ask_emails("Client recipients (space-separated, Enter for none): ")
-    schedule = _ask_schedule()
-    phases = _ask_phases()
+    print("Extracting configuration from brief (Claude)...")
+    try:
+        extracted = _extract_from_brief(brief_content, registry_text)
+    except PreflightError as e:
+        print(f"Extraction failed: {e}")
+        sys.exit(1)
+
+    print(f"\nExtracted:")
+    print(f"  Project:   {extracted.get('project_name','')} / slug: {extracted.get('project_slug','')}")
+    print(f"  Internal:  {', '.join(extracted.get('recipients_internal', [])) or '(none)'}")
+    print(f"  Client:    {', '.join(extracted.get('recipients_client', [])) or '(none)'}")
+    sched = extracted.get("email_schedule", {})
+    print(f"  Schedule:  {' '.join(sched.get('days', []))} at {sched.get('hour','')}:00 {sched.get('timezone','')}")
+    for p in extracted.get("phases", []):
+        print(f"  Phase:     {p['name']} {p.get('start_date','')} → {p.get('end_date','')} steps {p.get('step_range', [])}")
+
+    confirm = _ask("\nProceed? (Enter to confirm, n to cancel): ")
+    if confirm.lower() == "n":
+        print("Cancelled. Edit the brief file and re-run.")
+        sys.exit(0)
+
     board_ui_notes = _ask("Board UI notes (Enter to skip): ")
 
     return {
-        "project_name": project_name, "project_slug": project_slug,
-        "repo_url": repo_url, "engagement_folder": engagement_folder,
+        "project_name": extracted["project_name"],
+        "project_slug": extracted["project_slug"],
+        "repo_url": repo_url,
+        "engagement_folder": engagement_folder,
         "_owner": owner, "_repo": repo, "_branch": branch,
-        "recipients_internal": internal, "recipients_client": client,
-        "email_schedule": schedule, "phases": phases,
-        "board_ui_notes": board_ui_notes,
+        "recipients_internal": extracted.get("recipients_internal", []),
+        "recipients_client": extracted.get("recipients_client", []),
+        "email_schedule": extracted["email_schedule"],
+        "phases": extracted["phases"],
+        "board_ui_notes": board_ui_notes or extracted.get("board_ui_notes", ""),
     }
 
 
@@ -320,17 +345,6 @@ def _check_registry(form: dict) -> tuple[str, list[dict]]:
     if not components:
         raise PreflightError(f"Registry not parseable at {reg_path}")
     return text, components
-
-
-def _check_phase_assignments(form: dict, comp_ids: set[str]) -> None:
-    seen: dict[str, str] = {}
-    for phase in form["phases"]:
-        for cid in phase["component_ids"]:
-            if cid not in comp_ids:
-                raise PreflightError(f"Component {cid} in phase '{phase['name']}' not found in registry")
-            if cid in seen:
-                raise PreflightError(f"Component {cid} appears in phases '{seen[cid]}' and '{phase['name']}'")
-            seen[cid] = phase["name"]
 
 
 def _preflight_claude(form: dict, registry_text: str, summary_text: str) -> None:
@@ -355,8 +369,7 @@ def _preflight_claude(form: dict, registry_text: str, summary_text: str) -> None
 
 def run_preflight(form: dict) -> str:
     """Runs all preflight checks. Returns registry_text for reuse by board generation."""
-    registry_text, components = _check_registry(form)
-    _check_phase_assignments(form, {c["id"] for c in components})
+    registry_text, _ = _check_registry(form)
     owner, repo, branch = form["_owner"], form["_repo"], form["_branch"]
     summary_api_path = f"{form['engagement_folder']}/_action-summary.md"
     try:
@@ -374,7 +387,7 @@ def _build_prompt(form: dict, registry_text: str, guidelines: str, template: str
     components = parse_registry(registry_text)
     phases_fmt = "\n".join(
         f"{i+1}. {p['name']} ({p['id']}): {p['description']}. "
-        f"Components: {', '.join(p['component_ids'])}. Dates: {p['start_date']} to {p['end_date']}"
+        f"DR steps {p['step_range'][0]}–{p['step_range'][1]}. Dates: {p['start_date']} to {p['end_date']}"
         for i, p in enumerate(form["phases"])
     )
     comps_fmt = "\n".join(f"- {c['id']}: {c['name']}" for c in components)

@@ -73,7 +73,8 @@ def parse_registry(registry_text: str) -> list[dict]:
     return components
 
 
-def resolve_workflow_step(comp_id: str, action_summary: str) -> str:
+def resolve_workflow_step(comp_id: str, action_summary: str) -> int:
+    """Returns the highest DR step number completed for this component. 0 if none found."""
     sections = re.split(r"(?m)(?=^## Step \d+)", action_summary)
     highest = -1
     for section in sections:
@@ -88,12 +89,13 @@ def resolve_workflow_step(comp_id: str, action_summary: str) -> str:
         if _PASS_RE.search(section):
             highest = max(highest, step_num)
     if highest < 0:
-        warnings.warn(f"No step entry found for {comp_id} — defaulting to Pending HLD Approval")
-        return "Pending HLD Approval"
-    return _STEP_MAP.get(highest, "Pending HLD Approval")
+        warnings.warn(f"No step entry found for {comp_id} — defaulting to step 0")
+        return 0
+    return highest
 
 
-def resolve_steps(registry_path: Path, action_summary_path: Path) -> dict[str, str]:
+def resolve_steps(registry_path: Path, action_summary_path: Path) -> dict[str, int]:
+    """Returns {comp_id: step_number} for all components in the registry."""
     try:
         registry_text = registry_path.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -104,7 +106,7 @@ def resolve_steps(registry_path: Path, action_summary_path: Path) -> dict[str, s
     if action_summary_path.exists():
         action_summary = action_summary_path.read_text(encoding="utf-8")
     else:
-        warnings.warn("No _action-summary.md found — all components default to Pending HLD Approval")
+        warnings.warn("No _action-summary.md found — all components default to step 0")
         action_summary = ""
     return {c["id"]: resolve_workflow_step(c["id"], action_summary) for c in components}
 
@@ -203,23 +205,27 @@ def collect_delta(action_summary_path: Path) -> dict:
 
 # ── Payload assembly (Issue #19) ─────────────────────────────────────────────
 
-def _phase_status(comp_ids: list[str], steps: dict[str, str]) -> str:
-    statuses = [steps.get(c, "Pending HLD Approval") for c in comp_ids]
-    if all(s == "PR Evidence" for s in statuses):
+def _phase_status(comp_ids: list[str], steps: dict[str, int]) -> str:
+    nums = [steps.get(c, 0) for c in comp_ids]
+    if not nums:
+        return "tbd"
+    if all(n == 9 for n in nums):
         return "done"
-    if any(s != "Pending HLD Approval" for s in statuses):
+    if any(n > 0 for n in nums):
         return "in_progress"
     return "tbd"
 
 
-def _comp_entry(comp_id: str, phase_id: str | None, step: str, idata: dict) -> dict:
+def _comp_entry(comp_id: str, phase_id: str | None, step_num: int, idata: dict) -> dict:
+    step_label = _STEP_MAP.get(step_num, "Pending HLD Approval")
     has_b = bool(idata["blockers"])
     has_dr = bool(idata["data_requests"])
     return {
         "name": comp_id,
         "phase": phase_id,
-        "step": step,
-        "step_color": STEP_COLORS.get(step, "#52526e"),
+        "step": step_label,
+        "step_num": step_num,
+        "step_color": STEP_COLORS.get(step_label, "#52526e"),
         "has_blocker": has_b,
         "has_data_request": has_dr,
         "border_status": "red" if has_b else ("yellow" if has_dr else "none"),
@@ -227,7 +233,7 @@ def _comp_entry(comp_id: str, phase_id: str | None, step: str, idata: dict) -> d
     }
 
 
-def build_payload(config: dict, steps: dict[str, str], issues: dict[str, dict], generated_at: str) -> dict:
+def build_payload(config: dict, steps: dict[str, int], issues: dict[str, dict], generated_at: str) -> dict:
     components: dict[str, dict] = {}
     all_blockers: list = []
     all_dr: list = []
@@ -236,18 +242,21 @@ def build_payload(config: dict, steps: dict[str, str], issues: dict[str, dict], 
         for comp_id in phase.get("component_ids", []):
             assigned.add(comp_id)
             idata = issues.get(comp_id, _EMPTY_ISSUES)
-            components[comp_id] = _comp_entry(comp_id, phase["id"], steps.get(comp_id, "Pending HLD Approval"), idata)
+            components[comp_id] = _comp_entry(comp_id, phase["id"], steps.get(comp_id, 0), idata)
             all_blockers.extend(idata["blockers"])
             all_dr.extend(idata["data_requests"])
     for comp_id in steps:
         if comp_id not in assigned:
-            warnings.warn(f"Component {comp_id} not assigned to any phase in config — excluded from phase status calculation.")
+            warnings.warn(f"Component {comp_id} not assigned to any phase — included without phase")
             components[comp_id] = _comp_entry(comp_id, None, steps[comp_id], issues.get(comp_id, _EMPTY_ISSUES))
     phases = [
-        {"id": p["id"], "name": p["name"], "status": _phase_status(p.get("component_ids", []), steps), "component_ids": p.get("component_ids", [])}
+        {"id": p["id"], "name": p["name"],
+         "status": _phase_status(p.get("component_ids", []), steps),
+         "component_ids": p.get("component_ids", [])}
         for p in config.get("phases", [])
     ]
-    return {"project": config["project_name"], "generated": generated_at, "board_url": config["board_url"], "phases": phases, "components": components, "blockers": all_blockers, "data_requests": all_dr}
+    return {"project": config["project_name"], "generated": generated_at, "board_url": config["board_url"],
+            "phases": phases, "components": components, "blockers": all_blockers, "data_requests": all_dr}
 
 
 # ── Top-level orchestrator (Issue #20) ───────────────────────────────────────
