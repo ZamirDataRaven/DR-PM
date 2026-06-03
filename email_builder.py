@@ -71,13 +71,21 @@ def _section(title: str, content: str) -> str:
     return hdr + f'<tr><td style="padding:16px 24px">{content}</td></tr>'
 
 
-def _phase_table(phases: list) -> str:
+def _phase_table(phases: list, components: dict) -> str:
     rows = ""
     for p in phases:
-        color = _STATUS_COLORS.get(p.get("status", "tbd"), "#9ca3af")
-        badge = f'<span style="background:{color};color:#fff;padding:2px 8px;border-radius:10px;{_FONT};font-size:12px">{p.get("status","tbd")}</span>'
-        count = len(p.get("component_ids", []))
-        rows += f'<tr><td style="padding:6px 0;{_FONT};font-size:14px">{p.get("name","")}</td><td style="padding:6px 8px">{badge}</td><td style="padding:6px 0;{_FONT};font-size:13px;color:#666">{count} components</td></tr>'
+        step_counts: dict = {}
+        for comp_id in p.get("component_ids", []):
+            step = components.get(comp_id, {}).get("step", "Unknown")
+            step_counts[step] = step_counts.get(step, 0) + 1
+        step_parts = " &nbsp;·&nbsp; ".join(
+            f'<span style="color:{STEP_COLORS.get(s,"#666")};font-weight:600">{c}× {s}</span>'
+            for s, c in sorted(step_counts.items())
+        ) or '<span style="color:#999">No components</span>'
+        rows += (
+            f'<tr><td style="padding:8px 0;{_FONT};font-size:14px;font-weight:600;vertical-align:top;width:180px">{p.get("name","")}</td>'
+            f'<td style="padding:8px 0;{_FONT};font-size:13px">{step_parts}</td></tr>'
+        )
     return f'<table width="100%" style="border-collapse:collapse">{rows or "<tr><td>No phases</td></tr>"}</table>'
 
 
@@ -122,14 +130,13 @@ def _email_header(pname: str, board_url: str, today: str) -> str:
     )
 
 
-def build_email_body(payload: dict, delta: dict, narrative: str, config: dict) -> str:
+def build_email_body(payload: dict, delta: dict, config: dict) -> str:
     pname = config.get("project_name", "")
     board_url = config.get("board_url", "")
     today = payload.get("generated", "")[:10]
-    narr = _section("Today's Summary", f'<p style="{_FONT};font-size:14px;color:#333;line-height:1.6;margin:0">{narrative}</p>')
     body = (
-        _email_header(pname, board_url, today) + narr
-        + _section("Phase Status", _phase_table(payload.get("phases", [])))
+        _email_header(pname, board_url, today)
+        + _section("Phase Status", _phase_table(payload.get("phases", []), payload.get("components", {})))
         + _section("Component Progress", _step_table(payload.get("components", {})))
         + _section("New Progress (Last 24 Hours)", _advances_html(delta.get("advances", [])))
         + _section("Active Blockers", _issues_table(payload.get("blockers", []), "blocker"))
@@ -242,7 +249,6 @@ def send(payload: dict, delta: dict, project_repo_root: str, engagement_folder: 
     if not recipients:
         warnings.warn("No recipients configured — skipping email send")
         return
-    narrative = write_narrative(payload, delta)
-    html_body = build_email_body(payload, delta, narrative, config)
+    html_body = build_email_body(payload, delta, config)
     today = payload.get("generated", "")[:10]
     send_email(f"DR-PM | {config['project_name']} | {today}", html_body, recipients)
