@@ -36,7 +36,8 @@ def inject_payload(html: str, payload: dict) -> str:
         raise BoardUpdateError(
             "Multiple window.DR_PM_DATA assignments found in index.html — board is malformed"
         )
-    return _DATA_RE.sub(r"\g<1>" + json.dumps(payload, indent=2) + r"\g<2>", html)
+    repl = json.dumps(payload, indent=2)
+    return _DATA_RE.sub(lambda m: m.group(1) + repl + m.group(2), html)
 
 
 # ── rsync helpers (Issues #28) ────────────────────────────────────────────────
