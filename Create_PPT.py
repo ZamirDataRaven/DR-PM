@@ -387,7 +387,7 @@ def _build_prompt(form: dict, registry_text: str, guidelines: str, template: str
     components = parse_registry(registry_text)
     phases_fmt = "\n".join(
         f"{i+1}. {p['name']} ({p['id']}): {p['description']}. "
-        f"DR steps {p['step_range'][0]}–{p['step_range'][1]}. Dates: {p['start_date']} to {p['end_date']}"
+        f"Components: {', '.join(p.get('component_ids', []))}. Dates: {p['start_date']} to {p['end_date']}"
         for i, p in enumerate(form["phases"])
     )
     comps_fmt = "\n".join(f"- {c['id']}: {c['name']}" for c in components)
