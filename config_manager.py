@@ -81,7 +81,7 @@ def validate_config(config: dict) -> None:
 
 
 def load_config(project_repo_root: str, engagement_folder: str) -> dict:
-    path = Path(project_repo_root) / engagement_folder / "reports" / "dr-pm-config.json"
+    path = Path(project_repo_root) / "DR PM" / engagement_folder / "dr-pm-config.json"
     try:
         raw = path.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -98,7 +98,7 @@ def load_config(project_repo_root: str, engagement_folder: str) -> dict:
 
 def save_config(config: dict, project_repo_root: str, engagement_folder: str) -> None:
     validate_config(config)
-    path = Path(project_repo_root) / engagement_folder / "reports" / "dr-pm-config.json"
+    path = Path(project_repo_root) / "DR PM" / engagement_folder / "dr-pm-config.json"
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError as e:

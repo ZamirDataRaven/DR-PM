@@ -534,7 +534,7 @@ def write_config(form: dict) -> None:
         print(f"Config validation failed: {e}")
         sys.exit(1)
     owner, repo, branch = form["_owner"], form["_repo"], form["_branch"]
-    config_path = f"{form['engagement_folder']}/reports/dr-pm-config.json"
+    config_path = f"DR PM/{form['engagement_folder']}/dr-pm-config.json"
     try:
         _gh_api_upsert(owner, repo, config_path, json.dumps(config, indent=2),
                        f"chore: initialise DR-PM for {config['project_name']}", branch)
