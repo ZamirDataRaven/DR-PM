@@ -34,15 +34,21 @@ _COMP_ID_RE = re.compile(r"\bCOMP(?:-[A-Z]+)?-\d+\b")
 
 STEP_COLORS: dict[str, str] = {
     "HLD Review":        "#52526e",
-    "HLD Decomposition": "#7c3aed",
-    "Create Spec":       "#a855f7",
+    "HLD Decomposition": "#059669",
+    "Create Spec":       "#0d9488",
     "Spec to Task":      "#3b82f6",
     "Req Verification":  "#06b6d4",
     "Coding Assist":     "#eab308",
     "Unit Test":         "#f97316",
     "Code Review":       "#ef4444",
-    "Pre-Commit Review": "#f43f5e",
+    "Pre-Commit Review": "#ea580c",
     "PR Evidence":       "#22c55e",
+}
+
+PHASE_STATUS_COLORS: dict[str, str] = {
+    "done":        "#22c55e",
+    "in_progress": "#059669",
+    "tbd":         "#52526e",
 }
 
 # Ported verbatim from create_pipeline1_report.py
