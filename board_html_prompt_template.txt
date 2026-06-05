@@ -15,6 +15,28 @@ The data object will be replaced daily by an automated process — do not hardco
 any component names, phase names, or status values into the HTML structure.
 Populate window.DR_PM_DATA with the project data provided in the user message.
 
+The data schema you must read from in your JavaScript (use these exact field names):
+  data.project                          — string, project title
+  data.generated                        — ISO timestamp string
+  data.board_url                        — string
+  data.phases[]                         — array of phase objects:
+    .id                                 — string, phase identifier
+    .name                               — string, display name
+    .status                             — "done" | "in_progress" | "tbd"
+    .component_ids[]                    — array of component ID strings (e.g. ["COMP-001"])
+                                          NOTE: the field is component_ids, NOT components
+  data.components                       — object keyed by component ID:
+    [compId].name                       — string, component display name
+    [compId].phase                      — string, phase id this component belongs to
+    [compId].step                       — string, current step label
+    [compId].step_color                 — hex color string (e.g. "#52526e")
+    [compId].has_blocker                — boolean
+    [compId].has_data_request           — boolean
+    [compId].tasks.open[]               — array of open task objects
+    [compId].tasks.closed[]             — array of closed task objects
+  data.blockers[]                       — array of blocker issue objects
+  data.data_requests[]                  — array of data request issue objects
+
 Output requirements:
 - Output the complete HTML file and nothing else. No explanation, no markdown
   code fences, no commentary before or after the HTML.
