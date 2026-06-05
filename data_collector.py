@@ -155,7 +155,16 @@ def _gh_get(url: str, token: str, params: dict) -> list:
                 return []
 
 
-def _categorise_issue(result: dict[str, dict], issue: dict, state: str) -> None:
+def _issue_matches_project(issue: dict, project_slug: str | None) -> bool:
+    """Return True if the issue body contains the project slug, or if no filtering needed."""
+    if not project_slug:
+        return True
+    body = issue.get("body") or ""
+    return project_slug in body
+
+
+def _categorise_issue(result: dict[str, dict], issue: dict, state: str,
+                      project_slug: str | None = None) -> None:
     match = _COMP_ID_RE.search(issue.get("title", ""))
     if not match or match.group() not in result:
         return
@@ -165,14 +174,19 @@ def _categorise_issue(result: dict[str, dict], issue: dict, state: str) -> None:
     if state == "closed":
         result[comp_id]["closed_tasks"].append(slim)
     elif "blocker" in label_names:
+        if not _issue_matches_project(issue, project_slug):
+            return
         result[comp_id]["blockers"].append(slim)
     elif "data-request" in label_names:
+        if not _issue_matches_project(issue, project_slug):
+            return
         result[comp_id]["data_requests"].append(slim)
     else:
         result[comp_id]["open_tasks"].append(slim)
 
 
-def collect_issues(repo: str, github_token: str, comp_ids: list[str]) -> dict[str, dict]:
+def collect_issues(repo: str, github_token: str, comp_ids: list[str],
+                   project_slug: str | None = None) -> dict[str, dict]:
     result: dict[str, dict] = {
         cid: {"blockers": [], "data_requests": [], "open_tasks": [], "closed_tasks": []}
         for cid in comp_ids
@@ -180,7 +194,7 @@ def collect_issues(repo: str, github_token: str, comp_ids: list[str]) -> dict[st
     base = f"{_GH_API}/repos/{repo}/issues"
     for state in ("open", "closed"):
         for issue in _gh_get(base, github_token, {"state": state, "per_page": 100}):
-            _categorise_issue(result, issue, state)
+            _categorise_issue(result, issue, state, project_slug)
     return result
 
 
@@ -285,7 +299,8 @@ def collect(project_repo_root: str, engagement_folder: str, github_token: str) -
         raise DataCollectorError(f"Config load failed: {e}")
     steps, names = resolve_steps(registry_path, summary_path)
     repo = config["repo_url"].replace("https://github.com/", "").rstrip("/")
-    issues = collect_issues(repo, github_token, list(steps.keys()))
+    project_slug = config.get("project_slug")
+    issues = collect_issues(repo, github_token, list(steps.keys()), project_slug)
     delta_raw = collect_delta(summary_path)
     generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     payload = build_payload(config, steps, issues, generated_at, names)
