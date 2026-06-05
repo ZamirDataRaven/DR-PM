@@ -57,18 +57,19 @@ Font stack: `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif`
 
 Used as the primary accent on component cards (left border strip, 4px wide) and as phase bar segment colors.
 Step labels correspond exactly to the 10 DR framework steps (00–09).
+No purple or pink anywhere — accent palette is green → teal → blue → yellow → orange → red → green.
 
 | Workflow step | Color | Hex |
 | :---- | :---- | :---- |
 | HLD Review | Gray | `#52526e` |
-| HLD Decomposition | Dark purple | `#7c3aed` |
-| Create Spec | Purple | `#a855f7` |
+| HLD Decomposition | Emerald green | `#059669` |
+| Create Spec | Teal | `#0d9488` |
 | Spec to Task | Blue | `#3b82f6` |
 | Req Verification | Cyan | `#06b6d4` |
 | Coding Assist | Yellow | `#eab308` |
 | Unit Test | Orange | `#f97316` |
 | Code Review | Red | `#ef4444` |
-| Pre-Commit Review | Pink | `#f43f5e` |
+| Pre-Commit Review | Dark orange | `#ea580c` |
 | PR Evidence | Green | `#22c55e` |
 
 ### Phase status colors (phase bar segments)
@@ -76,8 +77,13 @@ Step labels correspond exactly to the 10 DR framework steps (00–09).
 | Phase status | Color |
 | :---- | :---- |
 | Done (all components at PR Evidence) | `#22c55e` (green) |
-| In progress (≥1 component active) | `#a855f7` (purple) |
+| In progress (≥1 component active) | `#059669` (emerald green) |
 | TBD (no components started) | `#52526e` (gray) |
+
+### Stream identity badge
+
+Each board displays a stream badge in the page header (next to the project title) identifying which stream it belongs to. Format: small pill, background = primary stream color, white text, `border-radius: 20px`, `font-size: 11px`, `font-weight: 600`.
+Stream color assignments: Stream 2 = `#059669` (emerald green). Set per project in board_ui_notes at Create_PPT time.
 
 ### Alert border overrides (component cards)
 
