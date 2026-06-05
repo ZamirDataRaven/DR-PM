@@ -56,8 +56,8 @@ def _check_phases(phases, errors: list) -> None:
         for field in ("id", "name", "description", "start_date", "end_date"):
             if not isinstance(phase.get(field), str):
                 errors.append(f"'phases[{i}].{field}': required string")
-        if not isinstance(phase.get("component_ids"), list) or not phase["component_ids"]:
-            errors.append(f"'phases[{i}].component_ids': required non-empty array")
+        if not isinstance(phase.get("component_ids"), list):
+            errors.append(f"'phases[{i}].component_ids': required array (may be empty)")
         if (all(isinstance(phase.get(d), str) for d in ("start_date", "end_date"))
                 and phase["end_date"] < phase["start_date"]):
             errors.append(f"'phases[{i}].end_date': must be >= start_date")
