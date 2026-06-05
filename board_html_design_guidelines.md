@@ -54,14 +54,19 @@ Font stack: `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif`
 ### Workflow step colors
 
 Used as the primary accent on component cards (left border strip, 4px wide) and as phase bar segment colors.
+Step labels correspond exactly to the 10 DR framework steps (00–09).
 
 | Workflow step | Color | Hex |
 | :---- | :---- | :---- |
-| Pending HLD Approval | Gray | `#52526e` |
-| Pending Spec Approval | Purple | `#a855f7` |
-| In Development | Yellow | `#eab308` |
+| HLD Review | Gray | `#52526e` |
+| HLD Decomposition | Dark purple | `#7c3aed` |
+| Create Spec | Purple | `#a855f7` |
+| Spec to Task | Blue | `#3b82f6` |
+| Req Verification | Cyan | `#06b6d4` |
+| Coding Assist | Yellow | `#eab308` |
 | Unit Test | Orange | `#f97316` |
-| Review | Red-pink | `#ef4444` |
+| Code Review | Red | `#ef4444` |
+| Pre-Commit Review | Pink | `#f43f5e` |
 | PR Evidence | Green | `#22c55e` |
 
 ### Phase status colors (phase bar segments)
@@ -93,9 +98,10 @@ Full-width dark bar (`background: #0f0f1a`, `padding: 32px 24px`). Content cente
 
 ### Top zone — Phase bar
 
-- Full-width horizontal bar
+- Full-width horizontal bar (`width: 100%`, `display: flex`, no `flex-wrap`)
 - One segment per phase, ordered left to right
-- Segment: rounded pill (`border-radius: 6px`), colored background (phase status color), phase name in white 13px 600 weight
+- **Proportional width**: each segment's flex value equals its `component_ids.length`; phases with 0 components get `flex: 1` (minimum visible sliver). Set via JS: `seg.style.flex = String(Math.max(phase.component_ids.length, 1))`
+- Segment: rounded pill (`border-radius: 6px`), colored background (phase status color), phase name in white 13px 600 weight, `min-width: 0`
 - Active (selected/clicked) segment: full opacity; inactive: 65% opacity
 - Clicking a segment filters the middle zone to show only that phase's components; clicking again deselects (shows all)
 - Phase count badge (e.g. "4 components") shown inside segment in 11px muted text
@@ -137,25 +143,25 @@ window.DR_PM_DATA = {
       id: "phase-1",
       name: "Phase Name",
       status: "in_progress",  // "done" | "in_progress" | "tbd"
-      components: ["COMP-PM-001", "COMP-PM-004"]
+      component_ids: ["COMP-001", "COMP-004"]  // NOTE: field is component_ids, NOT components
     }
   ],
   components: {
-    "COMP-PM-001": {
-      name: "Create_PPT",
+    "COMP-001": {
+      name: "Webhook Handler",          // real component name from registry
       phase: "phase-1",
-      step: "In Development",
-      step_color: "#eab308",
+      step: "HLD Decomposition",        // one of the 10 DR step labels (see §4)
+      step_color: "#7c3aed",
       has_blocker: false,
       has_data_request: false,
       tasks: {
-        open: [{ number: 12, title: "...", labels: [] }],
+        open: [{ number: 12, title: "..." }],
         closed: [{ number: 8, title: "..." }]
       }
     }
   },
   blockers: [
-    { component_id: "COMP-PM-001", issue_number: 15, title: "...", opened: "2026-05-28" }
+    { component_id: "COMP-001", issue_number: 15, title: "...", opened: "2026-05-28" }
   ],
   data_requests: []
 };
