@@ -16,17 +16,16 @@ class DataCollectorError(Exception):
     pass
 
 
-# Ported verbatim from create_pipeline1_report.py
 _STEP_MAP: dict[int, str] = {
-    0: "Pending HLD Approval",
-    1: "Pending HLD Approval",
-    2: "Pending Spec Approval",
-    3: "In Development",
-    4: "In Development",
-    5: "In Development",
+    0: "HLD Review",
+    1: "HLD Decomposition",
+    2: "Create Spec",
+    3: "Spec to Task",
+    4: "Req Verification",
+    5: "Coding Assist",
     6: "Unit Test",
-    7: "Review",
-    8: "Review",
+    7: "Code Review",
+    8: "Pre-Commit Review",
     9: "PR Evidence",
 }
 
@@ -34,12 +33,16 @@ _STEP_MAP: dict[int, str] = {
 _COMP_ID_RE = re.compile(r"\bCOMP(?:-[A-Z]+)?-\d+\b")
 
 STEP_COLORS: dict[str, str] = {
-    "Pending HLD Approval":  "#52526e",
-    "Pending Spec Approval": "#a855f7",
-    "In Development":        "#eab308",
-    "Unit Test":             "#f97316",
-    "Review":                "#ef4444",
-    "PR Evidence":           "#22c55e",
+    "HLD Review":        "#52526e",
+    "HLD Decomposition": "#7c3aed",
+    "Create Spec":       "#a855f7",
+    "Spec to Task":      "#3b82f6",
+    "Req Verification":  "#06b6d4",
+    "Coding Assist":     "#eab308",
+    "Unit Test":         "#f97316",
+    "Code Review":       "#ef4444",
+    "Pre-Commit Review": "#f43f5e",
+    "PR Evidence":       "#22c55e",
 }
 
 # Ported verbatim from create_pipeline1_report.py
@@ -94,8 +97,8 @@ def resolve_workflow_step(comp_id: str, action_summary: str) -> int:
     return highest
 
 
-def resolve_steps(registry_path: Path, action_summary_path: Path) -> dict[str, int]:
-    """Returns {comp_id: step_number} for all components in the registry."""
+def resolve_steps(registry_path: Path, action_summary_path: Path) -> tuple[dict[str, int], dict[str, str]]:
+    """Returns ({comp_id: step_number}, {comp_id: name}) for all components in the registry."""
     try:
         registry_text = registry_path.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -108,7 +111,9 @@ def resolve_steps(registry_path: Path, action_summary_path: Path) -> dict[str, i
     else:
         warnings.warn("No _action-summary.md found — all components default to step 0")
         action_summary = ""
-    return {c["id"]: resolve_workflow_step(c["id"], action_summary) for c in components}
+    steps = {c["id"]: resolve_workflow_step(c["id"], action_summary) for c in components}
+    names = {c["id"]: c["name"] for c in components}
+    return steps, names
 
 
 # ── GitHub Issues API (Issue #17) ────────────────────────────────────────────
@@ -216,12 +221,12 @@ def _phase_status(comp_ids: list[str], steps: dict[str, int]) -> str:
     return "tbd"
 
 
-def _comp_entry(comp_id: str, phase_id: str | None, step_num: int, idata: dict) -> dict:
-    step_label = _STEP_MAP.get(step_num, "Pending HLD Approval")
+def _comp_entry(comp_id: str, phase_id: str | None, step_num: int, idata: dict, name: str | None = None) -> dict:
+    step_label = _STEP_MAP.get(step_num, "HLD Review")
     has_b = bool(idata["blockers"])
     has_dr = bool(idata["data_requests"])
     return {
-        "name": comp_id,
+        "name": name or comp_id,
         "phase": phase_id,
         "step": step_label,
         "step_num": step_num,
@@ -233,7 +238,9 @@ def _comp_entry(comp_id: str, phase_id: str | None, step_num: int, idata: dict) 
     }
 
 
-def build_payload(config: dict, steps: dict[str, int], issues: dict[str, dict], generated_at: str) -> dict:
+def build_payload(config: dict, steps: dict[str, int], issues: dict[str, dict], generated_at: str,
+                  names: dict[str, str] | None = None) -> dict:
+    names = names or {}
     components: dict[str, dict] = {}
     all_blockers: list = []
     all_dr: list = []
@@ -242,13 +249,13 @@ def build_payload(config: dict, steps: dict[str, int], issues: dict[str, dict], 
         for comp_id in phase.get("component_ids", []):
             assigned.add(comp_id)
             idata = issues.get(comp_id, _EMPTY_ISSUES)
-            components[comp_id] = _comp_entry(comp_id, phase["id"], steps.get(comp_id, 0), idata)
+            components[comp_id] = _comp_entry(comp_id, phase["id"], steps.get(comp_id, 0), idata, names.get(comp_id))
             all_blockers.extend(idata["blockers"])
             all_dr.extend(idata["data_requests"])
     for comp_id in steps:
         if comp_id not in assigned:
             warnings.warn(f"Component {comp_id} not assigned to any phase — included without phase")
-            components[comp_id] = _comp_entry(comp_id, None, steps[comp_id], issues.get(comp_id, _EMPTY_ISSUES))
+            components[comp_id] = _comp_entry(comp_id, None, steps[comp_id], issues.get(comp_id, _EMPTY_ISSUES), names.get(comp_id))
     phases = [
         {"id": p["id"], "name": p["name"],
          "status": _phase_status(p.get("component_ids", []), steps),
@@ -270,11 +277,11 @@ def collect(project_repo_root: str, engagement_folder: str, github_token: str) -
         config = load_config(project_repo_root, engagement_folder)
     except (ConfigLoadError, ConfigValidationError) as e:
         raise DataCollectorError(f"Config load failed: {e}")
-    steps = resolve_steps(registry_path, summary_path)
+    steps, names = resolve_steps(registry_path, summary_path)
     repo = config["repo_url"].replace("https://github.com/", "").rstrip("/")
     issues = collect_issues(repo, github_token, list(steps.keys()))
     delta_raw = collect_delta(summary_path)
     generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-    payload = build_payload(config, steps, issues, generated_at)
+    payload = build_payload(config, steps, issues, generated_at, names)
     delta = {**delta_raw, "new_blockers": [], "resolved_blockers": [], "new_data_requests": [], "resolved_data_requests": []}
     return payload, delta
