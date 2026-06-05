@@ -241,16 +241,22 @@ def _phase_status(comp_ids: list[str], steps: dict[str, int]) -> str:
     return "tbd"
 
 
-def _comp_entry(comp_id: str, phase_id: str | None, step_num: int, idata: dict, name: str | None = None) -> dict:
+def _comp_entry(comp_id: str, phase_id: str | None, step_num: int, idata: dict,
+                name: str | None = None, accent_color: str | None = None) -> dict:
     step_label = _STEP_MAP.get(step_num, "HLD Review")
     has_b = bool(idata["blockers"])
     has_dr = bool(idata["data_requests"])
+    # Use stream identity color for early steps (0-2) when accent_color is configured
+    if accent_color and step_num <= 2:
+        step_color = accent_color
+    else:
+        step_color = STEP_COLORS.get(step_label, "#52526e")
     return {
         "name": name or comp_id,
         "phase": phase_id,
         "step": step_label,
         "step_num": step_num,
-        "step_color": STEP_COLORS.get(step_label, "#52526e"),
+        "step_color": step_color,
         "has_blocker": has_b,
         "has_data_request": has_dr,
         "border_status": "red" if has_b else ("yellow" if has_dr else "none"),
@@ -261,6 +267,7 @@ def _comp_entry(comp_id: str, phase_id: str | None, step_num: int, idata: dict, 
 def build_payload(config: dict, steps: dict[str, int], issues: dict[str, dict], generated_at: str,
                   names: dict[str, str] | None = None) -> dict:
     names = names or {}
+    accent_color = config.get("accent_color")
     components: dict[str, dict] = {}
     all_blockers: list = []
     all_dr: list = []
@@ -269,13 +276,13 @@ def build_payload(config: dict, steps: dict[str, int], issues: dict[str, dict], 
         for comp_id in phase.get("component_ids", []):
             assigned.add(comp_id)
             idata = issues.get(comp_id, _EMPTY_ISSUES)
-            components[comp_id] = _comp_entry(comp_id, phase["id"], steps.get(comp_id, 0), idata, names.get(comp_id))
+            components[comp_id] = _comp_entry(comp_id, phase["id"], steps.get(comp_id, 0), idata, names.get(comp_id), accent_color)
             all_blockers.extend(idata["blockers"])
             all_dr.extend(idata["data_requests"])
     for comp_id in steps:
         if comp_id not in assigned:
             warnings.warn(f"Component {comp_id} not assigned to any phase — included without phase")
-            components[comp_id] = _comp_entry(comp_id, None, steps[comp_id], issues.get(comp_id, _EMPTY_ISSUES), names.get(comp_id))
+            components[comp_id] = _comp_entry(comp_id, None, steps[comp_id], issues.get(comp_id, _EMPTY_ISSUES), names.get(comp_id), accent_color)
     phases = [
         {"id": p["id"], "name": p["name"],
          "status": _phase_status(p.get("component_ids", []), steps),
