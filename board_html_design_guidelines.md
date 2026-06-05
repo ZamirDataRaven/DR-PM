@@ -12,7 +12,7 @@ These guidelines are the standing design rules Claude uses when generating the p
 
 ## 1. Theme
 
-Dark only. No light mode. No responsive breakpoints required — fixed-width desktop layout (minimum 1200px).
+Light gray only. No dark mode. No responsive breakpoints required — fixed-width desktop layout (minimum 1200px).
 
 No branding. No DR logo, wordmark, or identity marks anywhere on the board.
 
@@ -45,11 +45,13 @@ Font stack: `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif`
 
 | Element | Color |
 | :---- | :---- |
-| Page background | `#0f0f1a` |
-| Zone / panel background | `#16162a` |
-| Card background | `#1e1e2e` |
-| Card border (default) | `#2a2a3e` |
-| Divider / separator | `#252538` |
+| Page background | `#f4f4f8` |
+| Zone / panel background | `#eaeaf2` |
+| Card background | `#ffffff` |
+| Card border (default) | `#d0d0e4` |
+| Divider / separator | `#dddde8` |
+| Primary text | `#1c1c2e` |
+| Secondary / muted text | `#7878a8` |
 
 ### Workflow step colors
 
@@ -91,7 +93,7 @@ Step labels correspond exactly to the 10 DR framework steps (00–09).
 
 ### Page header (above all zones)
 
-Full-width dark bar (`background: #0f0f1a`, `padding: 32px 24px`). Content centered:
+Full-width light bar (`background: #f4f4f8`, `padding: 32px 24px`). Content centered:
 - Project name: 22px, 600 weight, `#e0e0f0`, centered
 - Generated date + board URL: 13px, `#7070a0`, centered, below project name
 - "View Live Board" button: purple `#a855f7`, white text, `border-radius: 6px`, centered, below date line
