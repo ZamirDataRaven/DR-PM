@@ -50,7 +50,7 @@ _PASS_RE = re.compile(
     r"(?:Approval:\s*Approved"
     r"|Registry\s+Approval:\s*Approved"
     r"|Verdict:\s*PASS(?:-WITH-CAVEATS)?"
-    r"|(?:Artifact|Note\s+artifact|Issues\s+drafted|Files):\s*\S)",
+    r"|(?:Artifacts?|Note\s+artifact|Issues\s+drafted|Files):\s*\S)",
     re.IGNORECASE,
 )
 _FAIL_RE = re.compile(r"Verdict:\s*FAIL\b", re.IGNORECASE)
