@@ -109,7 +109,7 @@ Full-width light bar (`background: #f4f4f8`, `padding: 32px 24px`). Content cent
 - Full-width horizontal bar (`width: 100%`, `display: flex`, no `flex-wrap`)
 - One segment per phase, ordered left to right
 - **Proportional width**: each segment's flex value equals its `component_ids.length`; phases with 0 components get `flex: 1` (minimum visible sliver). Set via JS: `seg.style.flex = String(Math.max(phase.component_ids.length, 1))`
-- Segment: rounded pill (`border-radius: 6px`), colored background (phase status color), phase name in white 13px 600 weight, `min-width: 0`
+- Segment: rounded pill (`border-radius: 6px`), colored background (phase status color), phase name in dark `#1c1c2e` 13px 600 weight, `min-width: 0`; count/date lines in `rgba(0,0,0,0.55)` and `rgba(0,0,0,0.45)` respectively
 - Active (selected/clicked) segment: full opacity; inactive: 65% opacity
 - Clicking a segment filters the middle zone to show only that phase's components; clicking again deselects (shows all)
 - Phase count badge (e.g. "4 components") shown inside segment in 11px muted text
